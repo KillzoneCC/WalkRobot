@@ -105,7 +105,6 @@ class JoystickController:
                 self.gait_manager.stop() # Останавливаем движение робота
             self.status = 'stop'
             self.update_param = False # Убеждаемся, что не обновляем параметры, если в режиме остановки
-            # Не выходим сразу, чтобы allow_move_buttons_check мог сбросить флаг update_param
             
         else: # Если робот в режиме скорости 1, 2 или 3
             # Получаем параметры для текущего выбранного режима скорости
@@ -116,13 +115,8 @@ class JoystickController:
             self.angle_move_amplitude = 0.0
             self.y_move_amplitude = 0.0
             
-            # Обновляем period_time, y_swap_amplitude (период, доля времени опоры на обе ноги, горизонтальное раскачивание)
-            # В вашей новой "3 скорости" y_swap_amplitude = 0.020, dsp_ratio = 0.22, period_time = 500.0
-            self.period_time = [
-                current_speed_settings.get('period_time')[0], # period_time
-                current_speed_settings.get('period_time')[1], # dsp_ratio
-                current_speed_settings.get('period_time')[2]  # y_swap_amplitude
-            ]
+            # Обновляем period_time, dsp_ratio, y_swap_amplitude из текущих настроек скорости
+            self.period_time = list(current_speed_settings['period_time'])
 
             # Управление движением вперед/назад по оси LY (левый стик по Y)
             if axes['ly'] > 0.3: # Движение вперед
@@ -212,9 +206,14 @@ class JoystickController:
                     self.init_z_offset = 0.025
             
             # Если высота тела изменилась
-            if self.update_height: # Не проверяем update_param здесь, так как высота независима
+            if self.update_height: 
                 self.gait_param = self.gait_manager.get_gait_param()
                 self.gait_param['body_height'] = self.init_z_offset
+                
+                # Определяем period_time для передачи в update_param
+                # Используем параметры из текущего speed_mode, если он активен,
+                # иначе используем базовые параметры из speed_params[1]
+                current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
                 
                 # Z-амплитуда шага должна быть взята из текущего режима скорости, если он не 0.
                 if self.speed_mode != 0: 
@@ -224,18 +223,20 @@ class JoystickController:
                     self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
                 
                 # Также передаем другие параметры, которые могут быть специфичны для скорости 3
-                self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0)
-                self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0)
-                self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0)
-                self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0)
-                self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0)
-                self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0)
-                self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0)
-                self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0)
-                self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0)
-                self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0)
+                # Используем .get() с запасным значением, чтобы избежать KeyError, если параметра нет для данной скорости
+                self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0) if self.speed_mode != 0 else 0.0
+                self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
 
-                self.gait_manager.update_param(self.period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
+                # Передаем обновленные параметры
+                self.gait_manager.update_param(current_period_time_for_update, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
                 self.time_stamp_ry = rospy.get_time() + 0.05 # Задержка для плавного изменения высоты
 
     # Заглушка для SELECT (не используется)
@@ -311,6 +312,10 @@ class JoystickController:
                     # Постепенное изменение высоты
                     self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
                     self.gait_param['body_height'] = self.init_z_offset
+                    
+                    # Определяем period_time для передачи в update_param
+                    current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
+
                     # Убедимся, что z_move_amplitude обновляется также
                     # Если в режиме остановки, используем значение по умолчанию для Z-амплитуды (Скорость 1)
                     if self.speed_mode != 0:
@@ -319,18 +324,18 @@ class JoystickController:
                         self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude'] 
 
                     # Передача дополнительных параметров для скорости 3
-                    self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0)
-                    self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0)
-                    self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0)
-                    self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0)
-                    self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0)
-                    self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0)
-                    self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0)
-                    self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0)
-                    self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0)
-                    self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0)
+                    self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0) if self.speed_mode != 0 else 0.0
+                    self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
 
-                    self.gait_manager.update_param(self.period_time, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
+                    self.gait_manager.update_param(current_period_time_for_update, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
                     time.sleep(0.05)
 
     # Заглушки для кнопок-крестовин (hat)
