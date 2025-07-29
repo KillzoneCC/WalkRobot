@@ -139,7 +139,7 @@ class JoystickController:
             
             # Устанавливаем высоту подъема ноги из параметров текущей скорости, если режим > 0
             if self.speed_mode > 0:
-                self.gait_param['z_move_amplitude'] = current_speed_settings['z_move_amplitude'] 
+                self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude'] 
             else: # Если speed_mode == 0, используем z_move_amplitude от Скорости 1 как базовое
                 self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
 
