@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# encoding: utf-8
+# encoding: utf:8
 import time
 import rospy
 from ainex_sdk import Board
@@ -42,7 +42,7 @@ class JoystickController:
             },
             3: { # Скорость 3 (Обновленные параметры в соответствии с вашими требованиями)
                 'period_time': [500.0, 0.22, 0.020], # period_time, dsp_ratio, y_swap_amplitude
-                'x_amp_base': 0.028,                 # x_move_amplitude (базовая амплитуда для шага вперед/назад)
+                'x_amp_base': 0.02,                 # ИЗМЕНЕНО: Исправлено на 0.02, чтобы соответствовать допустимому диапазону (-0.02~0.02)
                 'init_z_offset': 0.025,              # init_z_offset (начальное смещение по Z, высота тела)
                 'z_move_amplitude': 0.018,           # z_move_amplitude (амплитуда подъема ноги)
                 # Дополнительные параметры из вашего списка, если они могут быть использованы:
