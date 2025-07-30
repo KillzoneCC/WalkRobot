@@ -33,31 +33,32 @@ class JoystickController:
         self.speed_mode = 1 # Робот **начинается с первой скорости**, как запрошено
 
         # speed_params: Словарь, содержащий все параметры для каждого режима скорости.
+        # Для скоростей 0, 1, 2 оставляем только базовые параметры, чтобы избежать изменения позы
+        # Для скорости 3 сохраняем все специфические параметры.
         self.speed_params = {
             0: { # Скорость 0 (Остановка)
                 'period_time': [400, 0.2, 0.022], 
-                'x_amp_base': 0.0, # Амплитуда движения по X для остановки
+                'x_amp_base': 0.0, 
                 'init_z_offset': 0.025,
                 'z_move_amplitude': 0.016 
             },
-            1: { # Скорость 1 (По вашим точным указаниям)
+            1: { # Скорость 1 
                 'period_time': [400, 0.2, 0.022], 
                 'x_amp_base': 0.01,
                 'init_z_offset': 0.025,
                 'z_move_amplitude': 0.016 
             },
-            2: { # Скорость 2 (Как было согласовано)
+            2: { # Скорость 2 
                 'period_time': [600, 0.25, 0.022],
                 'x_amp_base': 0.020,
                 'init_z_offset': 0.025,
                 'z_move_amplitude': 0.016 
             },
-            3: { # Скорость 3 (Как было согласовано)
+            3: { # Скорость 3 (Все специфические параметры для этой походки)
                 'period_time': [500, 0.22, 0.022], 
-                'x_amp_base': 0.028, # Важно: это значение может быть ограничено MAX_FORWARD_AMPLITUDE
+                'x_amp_base': 0.028, 
                 'init_z_offset': 0.025,
                 'z_move_amplitude': 0.018, 
-                # Дополнительные параметры для скорости 3
                 'init_x_offset': 0.0,
                 'init_y_offset': -0.005,
                 'step_fb_ratio': 0.030,
@@ -74,11 +75,11 @@ class JoystickController:
         # ===================================================
 
         # Инициализация текущих параметров движения.
-        self.period_time = list(self.speed_params[self.speed_mode]['period_time']) # Инициализируем с параметрами первой скорости
+        self.period_time = list(self.speed_params[self.speed_mode]['period_time']) 
         self.x_move_amplitude = 0
         self.y_move_amplitude = 0
         self.angle_move_amplitude = 0
-        self.init_z_offset = self.speed_params[self.speed_mode]['init_z_offset'] # Высота тела по умолчанию для текущей скорости
+        self.init_z_offset = self.speed_params[self.speed_mode]['init_z_offset'] 
 
         self.time_stamp_ry = 0
         self.count_stop = 0 
@@ -96,25 +97,22 @@ class JoystickController:
         # Подписка на топик ROS '/joy' для получения данных с джойстика
         self.joy_sub = rospy.Subscriber('joy', Joy, self.joy_callback)
 
-        # Применяем параметры начальной скорости (1) и гарантируем остановку, если она не 0.
+        # Применяем параметры начальной скорости (1) и гарантируем остановку
         self._apply_speed_params() 
-        self.gait_manager.stop() # Гарантированная остановка при старте
+        self.gait_manager.stop() 
         rospy.loginfo(f"JoystickController initialized. Starting in Speed Mode: {self.speed_mode}")
-
 
     def _apply_speed_params(self):
         """
         Применяет параметры текущего режима скорости.
         Учитывает MAX_FORWARD_AMPLITUDE для предотвращения "перебора".
+        Игнорирует 'позиционные' параметры для скоростей 0, 1, 2, чтобы не менять позу.
         """
-        # Если speed_mode = 0, берем параметры из speed_params[0].
-        # Иначе, берем параметры из speed_params[self.speed_mode].
         params_key = self.speed_mode 
         current_speed_settings = self.speed_params[params_key]
 
         self.period_time = list(current_speed_settings['period_time'])
         
-        # Проверяем и ограничиваем x_amp_base, чтобы избежать "перебора"
         requested_x_amp_base = current_speed_settings['x_amp_base']
         if abs(requested_x_amp_base) > self.MAX_FORWARD_AMPLITUDE:
             rospy.logwarn(f"ВНИМАНИЕ: Запрошенная базовая амплитуда X для скорости {self.speed_mode} ({requested_x_amp_base}) превышает MAX_FORWARD_AMPLITUDE ({self.MAX_FORWARD_AMPLITUDE}). Ограничиваем.")
@@ -124,165 +122,161 @@ class JoystickController:
 
         self.init_z_offset = current_speed_settings['init_z_offset']
 
-        # Получаем текущие параметры походки, чтобы обновить их
         if hasattr(self, 'gait_manager') and self.gait_manager is not None:
             self.gait_param = self.gait_manager.get_gait_param()
             self.gait_param['init_z_offset'] = self.init_z_offset
             self.gait_param['z_move_amplitude'] = current_speed_settings['z_move_amplitude']
 
-            # Применяем все дополнительные параметры из speed_params для текущего режима скорости
-            for key, value in current_speed_settings.items():
-                if key not in ['period_time', 'x_amp_base', 'init_z_offset', 'z_move_amplitude', 'angle_move_amplitude']:
-                    self.gait_param[key] = value
-            
-            # Если переключаемся на скорость 0, убедимся, что робот остановится.
+            # Применяем специфические параметры только для скорости 3
+            if self.speed_mode == 3:
+                for key, value in current_speed_settings.items():
+                    # Исключаем те, которые мы уже обработали или которые не относятся к gait_param напрямую
+                    # А также исключаем параметры, которые могут изменить базовую позу (angle_move_amplitude здесь 0.0)
+                    if key not in ['period_time', 'x_amp_base', 'init_z_offset', 'z_move_amplitude']:
+                        self.gait_param[key] = value
+            else:
+                # Для скоростей 0, 1, 2 явно сбрасываем параметры, которые могут повлиять на позу,
+                # если они были установлены ранее (например, при переходе с скорости 3)
+                # Убедимся, что робот не меняет свою позу в режимах 0, 1, 2
+                self.gait_param['init_x_offset'] = 0.0
+                self.gait_param['init_y_offset'] = 0.0
+                self.gait_param['step_fb_ratio'] = 0.0 # Сброс, если он влиял на позу
+                self.gait_param['init_roll_offset'] = 0.0
+                self.gait_param['init_pitch_offset'] = 0.0
+                self.gait_param['z_swap_amplitude'] = 0.0 # Сброс, чтобы не влиял на позу стоя
+                self.gait_param['arm_swing_gain'] = 0.0 # Сброс, чтобы не влиял на позу стоя
+                self.gait_param['init_yaw_offset'] = 0.0
+                self.gait_param['pelvis_offset'] = 0.0
+                self.gait_param['hip_pitch_offset'] = 0.0
+
             if self.speed_mode == 0:
                 self.gait_manager.stop()
                 self.status = 'stop'
-                self.x_move_amplitude = 0.0 # Обнуляем амплитуды, чтобы избежать случайного движения
+                self.x_move_amplitude = 0.0 
                 self.y_move_amplitude = 0.0
                 self.angle_move_amplitude = 0.0
                 rospy.loginfo(f"Скорость переключена на: {self.speed_mode} (ОСТАНОВКА)")
             else:
                 rospy.loginfo(f"Скорость переключена на: {self.speed_mode}, Базовая амплитуда X: {self.base_x_move_amplitude}")
-                # Если робот был в состоянии "стоп" и перешел на скорость > 0, он не должен сразу начать движение.
-                # Здесь мы просто обновляем его внутренние параметры для новой скорости.
+                # Для скоростей 1, 2, 3 просто обновляем параметры, не запуская движение
                 self.gait_manager.update_param(self.period_time, 0.0, 0.0, 0.0, self.gait_param, step_num=0) 
 
 
-    # Метод для обработки входных данных с осей джойстика (движение, поворот)
     def axes_callback(self, axes):
-        # Сброс флага update_param в начале. Он будет установлен только если есть активное движение.
         self.update_param = False 
 
-        # Если робот находится в режиме остановки (speed_mode = 0),
-        # сбрасываем все амплитуды движения в ноль и гарантируем остановку.
         if self.speed_mode == 0:
             self.x_move_amplitude = 0.0
             self.angle_move_amplitude = 0.0
             self.y_move_amplitude = 0.0
-            if self.status == 'move': # Если робот был в движении, и переключили на 0 скорость
+            if self.status == 'move': 
                 self.gait_manager.stop() 
                 self.status = 'stop'
-            return # Выходим сразу, так как в режиме 0 движения быть не должно.
+            return 
             
         else: # Если робот в режиме скорости 1, 2 или 3
-            # Сбрасываем амплитуды движения (они будут установлены, если стики сдвинуты).
             self.x_move_amplitude = 0.0
             self.angle_move_amplitude = 0.0
             self.y_move_amplitude = 0.0
-            # Период времени обновляем на основе текущих настроек скорости
             self.period_time = list(self.speed_params[self.speed_mode]['period_time']) 
 
-            # Управление движением вперед/назад по оси LY (левый стик по Y)
-            if axes['ly'] > 0.3: # Движение вперед
+            if axes['ly'] > 0.3: 
                 self.update_param = True
                 self.x_move_amplitude = self.base_x_move_amplitude 
-            elif axes['ly'] < -0.3: # Движение назад
+            elif axes['ly'] < -0.3: 
                 self.update_param = True
                 self.x_move_amplitude = -self.base_x_move_amplitude
 
-            # Управление движением влево/вправо по оси LX (левый стик по X)
-            if axes['lx'] > 0.3: # Движение вправо
+            if axes['lx'] > 0.3: 
                 self.period_time[2] = 0.025 
                 self.update_param = True
                 self.y_move_amplitude = 0.015 
-            elif axes['lx'] < -0.3: # Движение влево
+            elif axes['lx'] < -0.3: 
                 self.period_time[2] = 0.025
                 self.update_param = True
                 self.y_move_amplitude = -0.015 
 
-            # Управление поворотом по оси RX (правый стик по X)
-            if axes['rx'] > 0.3: # Поворот вправо
+            if axes['rx'] > 0.3: 
                 self.update_param = True
                 self.angle_move_amplitude = 8 
-            elif axes['rx'] < -0.3: # Поворот влево
+            elif axes['rx'] < -0.3: 
                 self.update_param = True
                 self.angle_move_amplitude = -8 
         
-        # Если флаг update_param установлен (т.е. были изменения в движении или повороте)
         if self.update_param:
             self.gait_param = self.gait_manager.get_gait_param() 
             self.gait_param['init_z_offset'] = self.init_z_offset 
             self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude'] 
 
-            # Отправляем обновленные параметры движения в GaitManager
+            # Применяем специфические параметры gait_manager только для скорости 3, 
+            # когда робот действительно начинает двигаться.
+            if self.speed_mode == 3:
+                current_speed_settings = self.speed_params[self.speed_mode]
+                for key, value in current_speed_settings.items():
+                    if key not in ['period_time', 'x_amp_base', 'init_z_offset', 'z_move_amplitude', 'angle_move_amplitude']:
+                        self.gait_param[key] = value
+
             self.gait_manager.set_step(self.period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
             
-            # Обновляем статус движения
             if self.status == 'stop': 
                 self.status = 'move' 
-        elif self.status == 'move': # Если робот был в движении, но стики вернулись в нейтральное положение
+        elif self.status == 'move': 
             if self.x_move_amplitude == 0 and self.y_move_amplitude == 0 and self.angle_move_amplitude == 0:
                 self.status = 'stop'
                 self.gait_manager.stop() 
 
 
-    # Общий метод обратного вызова для осей (используется для контроля высоты тела)
     def callback(self, axes):
-        # Проверяем временную метку, чтобы не обновлять высоту слишком часто
         if rospy.get_time() > self.time_stamp_ry:
             self.update_height = False
-            # Управление высотой тела робота (ось RY - правый стик по Y)
-            if axes['ry'] < -0.5: # Поднять робота
+            if axes['ry'] < -0.5: 
                 self.update_height = True
                 self.init_z_offset += 0.005
-                if self.init_z_offset > 0.06: # Максимальная высота
+                if self.init_z_offset > 0.06: 
                     self.update_height = False
                     self.init_z_offset = 0.06
-            elif axes['ry'] > 0.5: # Опустить робота
+            elif axes['ry'] > 0.5: 
                 self.update_height = True
                 self.init_z_offset += -0.005
-                if self.init_z_offset < 0.025: # Минимальная высота
+                if self.init_z_offset < 0.025: 
                     self.update_height = False
                     self.init_z_offset = 0.025
             
-            # Если высота тела изменилась
             if self.update_height: 
                 self.gait_param = self.gait_manager.get_gait_param()
                 self.gait_param['body_height'] = self.init_z_offset
                 
-                # Z-амплитуда шага должна быть взята из текущего режима скорости, если он не 0.
                 if self.speed_mode != 0: 
                     self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
                 else: 
-                    # Если в режиме остановки, используем значение по умолчанию для Z-амплитуды (Скорость 1)
-                    self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+                    self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude'] 
 
                 # При изменении высоты, робот не должен двигаться по осям X, Y, Angle, 
                 # поэтому передаем 0.0 для этих амплитуд.
                 self.gait_manager.update_param(self.period_time, 0.0, 0.0, 0.0, self.gait_param, step_num=0)
-                self.time_stamp_ry = rospy.get_time() + 0.05 # Задержка для плавного изменения высоты
+                self.time_stamp_ry = rospy.get_time() + 0.05 
 
-    # Заглушка для SELECT (не используется)
     def select_callback(self, new_state):
         pass
 
-    # Кнопка R1: Переключение скорости по возрастанию: 0 -> 1 -> 2 -> 3. На 3-й остаётся.
     def r1_callback(self, new_state):
         if new_state == ButtonState.Pressed:
-            # Увеличиваем speed_mode, но не выше 3
             if self.speed_mode < 3:
                 self.speed_mode += 1
             
             rospy.loginfo(f"Speed Mode: {self.speed_mode}")
-            self.board.set_buzzer(1000 + self.speed_mode * 200, 0.05, 0.02, 1) # Звук в зависимости от скорости
-            self._apply_speed_params() # Применяем параметры новой скорости
+            self.board.set_buzzer(1000 + self.speed_mode * 200, 0.05, 0.02, 1) 
+            self._apply_speed_params() 
 
-
-    # Кнопка L1: Переключение скорости по убыванию: 3 -> 2 -> 1 -> 0
     def l1_callback(self, new_state):
         if new_state == ButtonState.Pressed:
-            # Уменьшаем speed_mode, но не ниже 0
             if self.speed_mode > 0:
                 self.speed_mode -= 1
             
             rospy.loginfo(f"Speed Mode: {self.speed_mode}")
-            self.board.set_buzzer(1000 - self.speed_mode * 100, 0.05, 0.02, 1) # Звук в зависимости от скорости
-            self._apply_speed_params() # Применяем параметры новой скорости
+            self.board.set_buzzer(1000 - self.speed_mode * 100, 0.05, 0.02, 1) 
+            self._apply_speed_params() 
 
-
-    # Заглушки для других кнопок
     def l2_callback(self, new_state):
         pass
 
@@ -301,21 +295,16 @@ class JoystickController:
     def cross_callback(self, new_state): 
         pass
 
-    # Метод обратного вызова для кнопки START (сброс высоты тела к начальной)
     def start_callback(self, new_state):
         if new_state == ButtonState.Pressed:
             self.board.set_buzzer(1900, 0.1, 0.05, 1)
             self.gait_param = self.gait_manager.get_gait_param()
-            # Вычисляем количество шагов для плавного возврата высоты к 0.025
             t = int(abs(0.025 - self.init_z_offset) / 0.005)
             if t != 0:
                 for i in range(t):
-                    # Постепенное изменение высоты
                     self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
                     self.gait_param['body_height'] = self.init_z_offset
                     
-                    # Убедимся, что z_move_amplitude обновляется также
-                    # Если в режиме остановки, используем значение по умолчанию для Z-амплитуды (Скорость 1)
                     if self.speed_mode != 0:
                         self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
                     else:
@@ -324,7 +313,6 @@ class JoystickController:
                     self.gait_manager.update_param(self.period_time, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
                     time.sleep(0.05)
 
-    # Заглушки для кнопок-крестовин (hat)
     def hat_xl_callback(self, new_state):
         pass
 
@@ -337,31 +325,24 @@ class JoystickController:
     def hat_yu_callback(self, new_state):
         pass
 
-    # Основной метод обратного вызова для сообщений с джойстика
     def joy_callback(self, joy_msg):
-        # Сопоставляем значения осей и кнопок с их именами
         axes = dict(zip(AXES_MAP, joy_msg.axes))
         axes_changed = False
         buttons = dict(zip(BUTTON_MAP, joy_msg.buttons))
         
-        # Обработка высоты тела (независимо от режима скорости)
         self.callback(axes)
         
-        # Проверяем, изменились ли значения осей (кроме 'ry', которая используется для высоты)
         for key, value in axes.items(): 
             if key != 'ry':
                 if self.last_axes[key] != value:
                     axes_changed = True
         
-        # Если оси изменились, вызываем axes_callback для обработки движения
-        # Axes_callback теперь сам обрабатывает логику для speed_mode 0.
         if axes_changed:
             try:
                 self.axes_callback(axes)
             except Exception as e:
                 rospy.logerr(str(e))
         
-        # Обработка состояний кнопок
         for key, value in buttons.items():
             new_state = ButtonState.Normal
             if value != self.last_buttons[key]: 
@@ -378,7 +359,6 @@ class JoystickController:
                     except Exception as e:
                         rospy.logerr(str(e))
         
-        # Сохраняем текущие состояния для следующего цикла
         self.last_buttons = buttons
         self.last_axes = axes
 
