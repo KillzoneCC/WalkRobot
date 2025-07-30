@@ -24,7 +24,7 @@ class JoystickController:
         self.board = Board()
 
         # ====== ПЕРЕМЕННЫЕ ДЛЯ РЕЖИМОВ СКОРОСТИ ======
-        self.speed_mode = 0 # Начинаем с остановки
+        self.speed_mode = 1 # Начинаем с остановки
 
         self.speed_params = {
             1: { # Скорость 1
@@ -296,7 +296,7 @@ class JoystickController:
         на основе состояния, определенного через IMU.
         """
         if new_state == ButtonState.Pressed:
-            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.")
+            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.") # msg.buttons[3]
 
             action_to_run = None
             log_msg = ""
