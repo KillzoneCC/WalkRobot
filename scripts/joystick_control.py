@@ -51,7 +51,7 @@ class JoystickController:
                 'init_y_offset': -0.005,
                 'step_fb_ratio': 0.030,
                 'init_roll_offset': 0.0,
-                'angle_move_amplitude': 0.0, # В `axes_callback` это значение переопределяется на 8 или -8
+                'angle_move_amplitude': 0.0, 
                 'init_pitch_offset': 0.0,
                 'z_swap_amplitude': 0.006,
                 'arm_swing_gain': 2.0,
@@ -91,9 +91,41 @@ class JoystickController:
 
         # Добавим начальную остановку робота при запуске
         self.gait_manager.stop()
+        
+        # === ВОЗВРАЩАЕМ ИНИЦИАЛИЗАЦИЮ: РОБОТ ВСТАНЕТ И ИЗДАСТ ЗВУК ===
+        self.set_init_pose() 
+        self.board.set_buzzer(1500, 0.1, 0.05, 1) # Звук при запуске
+        # ============================================================
+
         # Сообщение о старте в режиме скорости 1
         rospy.loginfo(f"JoystickController initialized. Starting in Speed Mode: {self.speed_mode}")
 
+    # Функция для установки начальной позы робота (чтобы он встал)
+    def set_init_pose(self):
+        rospy.loginfo("Setting initial pose...")
+        self.gait_manager.stop()
+        time.sleep(0.5)
+        
+        # Устанавливаем высоту по умолчанию из параметров скорости 1
+        self.init_z_offset = self.speed_params[1]['init_z_offset'] 
+        
+        gait_param = self.gait_manager.get_gait_param()
+        gait_param['body_height'] = self.init_z_offset
+        gait_param['init_x_offset'] = self.speed_params[1].get('init_x_offset', 0.0)
+        gait_param['init_y_offset'] = self.speed_params[1].get('init_y_offset', 0.0)
+        gait_param['init_roll_offset'] = self.speed_params[1].get('init_roll_offset', 0.0)
+        gait_param['init_pitch_offset'] = self.speed_params[1].get('init_pitch_offset', 0.0)
+        gait_param['init_yaw_offset'] = self.speed_params[1].get('init_yaw_offset', 0.0)
+        gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude'] # Z-амплитуда шага
+        gait_param['pelvis_offset'] = self.speed_params[1].get('pelvis_offset', 0.0)
+        gait_param['hip_pitch_offset'] = self.speed_params[1].get('hip_pitch_offset', 0.0)
+        gait_param['arm_swing_gain'] = self.speed_params[1].get('arm_swing_gain', 0.0)
+        
+        # Обновляем gait_manager с этими параметрами и устанавливаем нулевые амплитуды движения
+        self.gait_manager.update_param(self.speed_params[1]['period_time'], 0.0, 0.0, 0.0, gait_param, step_num=0)
+        self.gait_manager.set_init_pose() # Команда для принятия начальной позы
+        rospy.loginfo("Initial pose set.")
+        self.status = 'stop' # После установки позы робот находится в состоянии "стоп"
 
     # Метод для обработки входных данных с осей джойстика (движение, поворот)
     def axes_callback(self, axes):
@@ -307,9 +339,9 @@ class JoystickController:
     def start_callback(self, new_state):
         if new_state == ButtonState.Pressed:
             self.board.set_buzzer(1900, 0.1, 0.05, 1)
-            rospy.loginfo("Start button pressed. Height reset functionality removed.") # Логируем, что функционал сброса высоты убран
-            # Удалена вся логика, которая раньше возвращала init_z_offset к 0.025
-
+            rospy.loginfo("Start button pressed. Setting initial pose.")
+            self.set_init_pose() # Возвращаем робота в исходную позу и высоту
+            
     # Заглушки для кнопок-крестовин (hat)
     def hat_xl_callback(self, new_state):
         pass
