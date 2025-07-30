@@ -21,7 +21,7 @@ class JoystickController:
         self.board = Board()
 
         # ====== ПЕРЕМЕННЫЕ ДЛЯ РЕЖИМОВ СКОРОСТИ ======
-        self.speed_mode = 0 # Робот начинается с нулевой скорости
+        self.speed_mode = 1 # Робот начинается с нулевой скорости
         self.speed_params = {
             1: { # Скорость 1
                 'period_time': [400, 0.2, 0.022],
