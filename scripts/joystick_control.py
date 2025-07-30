@@ -16,10 +16,6 @@ class ButtonState():
     Released = 3
 
 class JoystickController:
-    # Определим максимальную амплитуду движения вперед, чтобы избежать "перебора".
-    # ЭТО ЗНАЧЕНИЕ НУЖНО НАСТРОИТЬ В ЗАВИСИМОСТИ ОТ ТОГО, ПРИ КАКОМ ЗНАЧЕНИИ ПРОИСХОДИТ ОШИБКА "ПЕРЕБОР".
-    MAX_FORWARD_AMPLITUDE = 0.025 # Примерное значение, возможно, 0.02, 0.03 и т.д.
-                                 # Пожалуйста, замените это значение на то, которое вызывает "перебор".
     def __init__(self):
         rospy.init_node('joystick_control', anonymous=True)
         self.board = Board()
@@ -63,9 +59,8 @@ class JoystickController:
                 'z_move_amplitude': 0.016
             },
             3: { # Скорость 3 (Максимальная скорость)
-                # Важно: 'x_amp_base' для 3 скорости не должен превышать MAX_FORWARD_AMPLITUDE
                 'period_time': [500.0, 0.22, 0.020],
-                'x_amp_base': 0.025, # Установил, чтобы не превышало MAX_FORWARD_AMPLITUDE
+                'x_amp_base': 0.03, # Увеличил для примера максимальной скорости
                 'init_z_offset': 0.025,
                 'z_move_amplitude': 0.018,
                 'init_x_offset': 0.0,
@@ -92,17 +87,12 @@ class JoystickController:
         self.joy_sub = rospy.Subscriber('joy', Joy, self.joy_callback)
 
     def _apply_speed_params(self):
-        """Применяет параметры текущего режима скорости, соблюдая максимальную амплитуду."""
+        """Применяет параметры текущего режима скорости."""
         params = self.speed_params[self.speed_mode]
         self.period_time = params['period_time']
-        
-        # Проверяем, чтобы базовая амплитуда не превышала MAX_FORWARD_AMPLITUDE
-        if abs(params['x_amp_base']) > self.MAX_FORWARD_AMPLITUDE:
-            rospy.logwarn(f"Предупреждение: Базовая амплитуда для скорости {self.speed_mode} ({params['x_amp_base']}) превышает MAX_FORWARD_AMPLITUDE ({self.MAX_FORWARD_AMPLITUDE}). Ограничиваем.")
-            self.base_x_move_amplitude = self.MAX_FORWARD_AMPLITUDE * (1 if params['x_amp_base'] > 0 else -1)
-        else:
-            self.base_x_move_amplitude = params['x_amp_base']
-
+        # x_move_amplitude будет установлен в axes_callback в зависимости от ly
+        # Здесь мы сохраняем базовую амплитуду для режима скорости
+        self.base_x_move_amplitude = params['x_amp_base']
         self.init_z_offset = params['init_z_offset']
 
         # Если робот останавливается (speed_mode == 0), то gait_manager.stop()
@@ -112,31 +102,30 @@ class JoystickController:
             rospy.loginfo("Робот остановлен (скорость 0).")
         else:
             # Применяем все параметры, если они есть в speed_params[self.speed_mode]
+            # Это позволяет легко добавлять новые параметры для каждой скорости
             current_gait_param = self.gait_manager.get_gait_param()
             for key, value in params.items():
                 if key not in ['period_time', 'x_amp_base']: # Эти параметры обрабатываются отдельно
                     current_gait_param[key] = value
             self.gait_param = current_gait_param # Обновляем gait_param
-            rospy.loginfo(f"Применена скорость: {self.speed_mode}, Базовая амплитуда X: {self.base_x_move_amplitude}")
+            rospy.loginfo(f"Применена скорость: {self.speed_mode}")
 
     def axes_callback(self, axes):
         self.x_move_amplitude = 0.00
         self.angle_move_amplitude = 0.00
         self.y_move_amplitude = 0.00
-        
+        # period_time уже задан через _apply_speed_params()
+
         # Управление движением только если робот не остановлен (speed_mode > 0)
         if self.speed_mode > 0:
             if axes['ly'] > 0.3:
                 self.update_param = True
-                # Применяем ограничение к текущей амплитуде, если она превышает MAX_FORWARD_AMPLITUDE
-                # В данном случае, self.base_x_move_amplitude уже содержит ограничение
-                self.x_move_amplitude = self.base_x_move_amplitude
+                self.x_move_amplitude = self.base_x_move_amplitude # Используем базовую амплитуду
             elif axes['ly'] < -0.3:
                 self.update_param = True
-                self.x_move_amplitude = -self.base_x_move_amplitude # Для движения назад
-
+                self.x_move_amplitude = -self.base_x_move_amplitude # Используем базовую амплитуду
             if axes['lx'] > 0.3:
-                self.period_time[2] = 0.025
+                self.period_time[2] = 0.025 # Было 0.025
                 self.update_param = True
                 self.y_move_amplitude = 0.015
             elif axes['lx'] < -0.3:
@@ -158,12 +147,6 @@ class JoystickController:
         if self.update_param:
             self.gait_param = self.gait_manager.get_gait_param()
             self.gait_param['init_z_offset'] = self.init_z_offset
-            # Убедимся, что передаваемая амплитуда не превышает лимит перед отправкой в gait_manager
-            # Этот check уже сделан в _apply_speed_params и base_x_move_amplitude уже ограничена
-            # Но можно добавить еще один слой защиты здесь, если x_move_amplitude вычисляется иначе.
-            # Например: self.x_move_amplitude = min(self.x_move_amplitude, self.MAX_FORWARD_AMPLITUDE)
-            # Но в данном случае это избыточно, так как мы берем из self.base_x_move_amplitude
-
             self.gait_manager.set_step(self.period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
             if self.status == 'stop':
                 self.status = 'move'
