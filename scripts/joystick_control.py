@@ -100,6 +100,7 @@ class JoystickController:
         """
         Обрабатывает данные с IMU для определения состояния падения.
         Логика адаптирована из примера мобильного приложения, используя ay и az.
+        ИСПРАВЛЕНО: Знак для определения 'lie' и 'recline' теперь корректен.
         """
         try:
             # Используем Y и Z компоненты линейного ускорения как в предоставленной вами логике IMU
@@ -108,36 +109,30 @@ class JoystickController:
 
             # Пороги (настройка под вашего робота, значения из мобильного приложения)
             # Если ваш IMU показывает другие значения, измените их.
-            # ACCEL_THRESH: порог для "большого" ускорения по оси Z (когда робот лежит)
-            # ANGLE_THRESH: порог для "плоского" угла (когда робот лежит горизонтально)
             ACCEL_THRESH = 7.0 # Настройте, если ваш робот дает другие значения при лежании
             ANGLE_THRESH = 30.0 # Настройте, если робот некорректно определяет горизонтальное положение
             COUNT_INCREMENT = 1
             COUNT_DECREMENT = 1
 
-            # Вычисляем угол наклона относительно оси Z (как в мобильном приложении)
-            # atan2(y, x) возвращает угол между положительной осью X и точкой (x, y)
-            # Здесь мы используем ay и az, предполагая, что они определяют плоскость падения.
-            if abs(az) > 1e-6: # Избегаем деления на ноль, если az очень мало
+            # Вычисляем угол наклона относительно оси Z
+            if abs(az) > 1e-6:
                 angle_rad = math.atan2(abs(ay), abs(az))
                 angle_deg = math.degrees(angle_rad)
             else:
-                # Если az почти 0, это может означать, что робот лежит на боку
-                # или находится в вертикальном положении, где основное ускорение по Y.
-                # В данном случае, если az близко к 0, а ay - нет, угол будет ~90 градусов.
-                angle_deg = 90.0
+                angle_deg = 90.0 # Если az почти 0, значит, робот лежит на боку
 
             # Debugging logs for IMU values and calculated angle
             # rospy.logdebug(f"IMU Raw: ay={ay:.2f}, az={az:.2f}, angle={angle_deg:.2f}")
 
             # Логика инкремента/декремента счетчиков, как в мобильном приложении
-            # Проверяем, находится ли робот в относительно горизонтальном положении (angle_deg < ANGLE_THRESH)
-            if angle_deg < ANGLE_THRESH:
-                if az < -ACCEL_THRESH: # Робот лежит "лицом вниз" (prone) по вашей текущей IMU-логике (az отрицательно)
+            if angle_deg < ANGLE_THRESH: # Если робот лежит относительно горизонтально
+                # ИСПРАВЛЕНО ЗНАК: Теперь 'az > ACCEL_THRESH' для 'лицом вниз'
+                # и 'az < -ACCEL_THRESH' для 'лицом вверх'
+                if az > ACCEL_THRESH: # Робот лежит "лицом вниз" (prone)
                     self.count_lie += COUNT_INCREMENT
                     self.count_recline = max(0, self.count_recline - COUNT_DECREMENT)
                     # rospy.logdebug(f"IMU: Incrementing LIE count. lie={self.count_lie}, recl={self.count_recline}")
-                elif az > ACCEL_THRESH: # Робот лежит "лицом вверх" (supine) по вашей текущей IMU-логике (az положительно)
+                elif az < -ACCEL_THRESH: # Робот лежит "лицом вверх" (supine)
                     self.count_recline += COUNT_INCREMENT
                     self.count_lie = max(0, self.count_lie - COUNT_DECREMENT)
                     # rospy.logdebug(f"IMU: Incrementing RECLINE count. lie={self.count_lie}, recl={self.count_recline}")
@@ -157,16 +152,11 @@ class JoystickController:
 
             # Проверяем счетчики и обновляем состояние робота
             if self.count_lie > self.FALL_COUNT_THRESHOLD:
-                # Если счетчик 'lie' превысил порог, считаем, что робот лежит "лицом вниз"
                 self.robot_state = 'lie_to_stand' # Это состояние означает, что требуется действие lie_to_stand
             elif self.count_recline > self.FALL_COUNT_THRESHOLD:
-                # Если счетчик 'recline' превысил порог, считаем, что робот лежит "лицом вверх"
                 self.robot_state = 'recline_to_stand' # Это состояние означает, что требуется действие recline_to_stand
             else:
-                # Если ни один из счетчиков не превысил порог, считаем, что робот стоит или его положение неопределено
-                # (т.к. мы сбрасываем счетчики, когда он не соответствует лежачему положению).
-                # Это состояние будет обработано в circle_callback
-                self.robot_state = 'stand_or_unknown' 
+                self.robot_state = 'stand_or_unknown' # Если ни один из счетчиков не превысил порог
 
             # Логируем изменение состояния, если оно произошло
             if old_state != self.robot_state:
@@ -304,9 +294,120 @@ class JoystickController:
         Выполняет действие "подняться" (Get Up).
         Автоматически выбирает между lie_to_stand и recline_to_stand
         на основе состояния, определенного через IMU.
-        ИСПРАВЛЕНО: Меняет местами действия, чтобы соответствовать
-        поведению вашего робота, где 'lie_to_stand' и 'recline_to_stand'
-        интерпретируются инверсно текущей IMU логике.
         """
         if new_state == ButtonState.Pressed:
-            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot
+            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.")
+
+            action_to_run = None
+            log_msg = ""
+            
+            # Определяем действие на основе состояния, определенного IMU
+            # Теперь imu_callback должна корректно определять 'lie_to_stand' для лежания на животе
+            # и 'recline_to_stand' для лежания на спине.
+            if self.robot_state == 'lie_to_stand':
+                action_to_run = self.lie_to_stand_action_name
+                log_msg = "Robot state indicates lying on FRONT. Initiating lie_to_stand."
+            elif self.robot_state == 'recline_to_stand':
+                action_to_run = self.recline_to_stand_action_name
+                log_msg = "Robot state indicates lying on BACK. Initiating recline_to_stand."
+            else: # 'stand_or_unknown'
+                rospy.logwarn(f"Robot state is '{self.robot_state}'. Defaulting to lie_to_stand (from front) as a fallback.")
+                action_to_run = self.lie_to_stand_action_name
+                log_msg = "Robot state 'stand' or 'unknown'. Defaulting to lie_to_stand (from front)."
+
+            rospy.loginfo(log_msg)
+            self.board.set_buzzer(1500, 0.1, 0.05, 1)
+
+            try:
+                if self.motion_manager is not None and action_to_run:
+                    self.motion_manager.run_action(action_to_run)
+                    rospy.loginfo(f"Action '{action_to_run}' initiated successfully.")
+                    
+                    # Сброс состояния и счетчиков после отправки команды подъема
+                    self.robot_state = 'stand'
+                    self.count_lie = 0
+                    self.count_recline = 0
+                    rospy.logdebug("Robot state set to 'stand' and IMU counters reset after Get Up command.")
+                    
+                else:
+                    rospy.logwarn("MotionManager not initialized or no action specified.")
+            except Exception as e:
+                rospy.logerr(f"Error calling MotionManager.run_action('{action_to_run}'): {e}")
+                
+    def start_callback(self, new_state):
+        if new_state == ButtonState.Pressed:
+            rospy.loginfo("Start button pressed. Resetting body height.")
+            self.board.set_buzzer(1900, 0.1, 0.05, 1)
+            self.gait_param = self.gait_manager.get_gait_param()
+            t = int(abs(0.025 - self.init_z_offset) / 0.005)
+            if t != 0:
+                for i in range(t):
+                    self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
+                    self.gait_param['body_height'] = self.init_z_offset
+
+                    current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
+
+                    if self.speed_mode != 0:
+                        self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
+                    else:
+                        self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+
+                    self.gait_manager.update_param(current_period_time_for_update, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
+                    time.sleep(0.05)
+
+    def hat_xl_callback(self, new_state):
+        pass
+
+    def hat_xr_callback(self, new_state):
+        pass
+
+    def hat_yd_callback(self, new_state):
+        pass
+
+    def hat_yu_callback(self, new_state):
+        pass
+
+    def joy_callback(self, joy_msg):
+        axes = dict(zip(AXES_MAP, joy_msg.axes))
+        axes_changed = False
+        buttons = dict(zip(BUTTON_MAP, joy_msg.buttons))
+
+        self.callback(axes) # Обработка высоты
+
+        for key, value in axes.items():
+            if key != 'ry':
+                if self.last_axes[key] != value:
+                    axes_changed = True
+
+        if axes_changed:
+            try:
+                self.axes_callback(axes)
+            except Exception as e:
+                rospy.logerr(f"Error in axes_callback: {e}")
+
+        # Обработка состояний кнопок
+        for key, value in buttons.items():
+            new_state = ButtonState.Normal
+            if value != self.last_buttons[key]:
+                new_state = ButtonState.Pressed if value > 0 else ButtonState.Released
+            else:
+                new_state = ButtonState.Holding if value > 0 else ButtonState.Normal
+
+            callback = "".join([key, '_callback'])
+
+            if new_state != ButtonState.Normal:
+                if hasattr(self, callback):
+                    try:
+                        getattr(self, callback)(new_state)
+                    except Exception as e:
+                        rospy.logerr(f"Error in {callback}: {e}")
+
+        self.last_buttons = buttons
+        self.last_axes = axes
+
+if __name__ == "__main__":
+    node = JoystickController()
+    try:
+        rospy.spin()
+    except Exception as e:
+        rospy.logerr(str(e))
