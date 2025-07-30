@@ -301,8 +301,8 @@ class JoystickController:
                 rospy.loginfo("Robot is already standing or in an unknown state. No 'Get up' action needed.")
             
             time.sleep(1.0) # Даем время роботу завершить действие
-            # После подъема можно вернуть робота в исходную позу ходьбы или просто стоять
-            self.gait_manager.stand()
+            # После подъема предполагается, что робот уже стоит.
+            # Удалена строка self.gait_manager.stand()
 
 
     def triangle_callback(self, new_state):
