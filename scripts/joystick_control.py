@@ -75,7 +75,7 @@ class JoystickController:
         self.motion_manager = MotionManager()
         # Имена действий подъема (взяты из Pasted_Text_1753855641149.txt)
         self.lie_to_stand_action_name = 'lie_to_stand'     # Подъем спереди
-        self.recline_to_stand_action_name = 'recline_to_stand' # Подъем сзади
+        # self.recline_to_stand_action_name = 'recline_to_stand' # Подъем сзади (может понадобиться позже)
         # =============================================
 
         # Подписка на топик ROS '/joy' для получения данных с джойстика
@@ -85,28 +85,181 @@ class JoystickController:
         self.gait_manager.stop()
         rospy.loginfo("JoystickController initialized. Starting in Speed Mode: 0 (STOP)")
 
-    # ... (остальные методы остаются без изменений: axes_callback, callback, select_callback,
-    #  r1_callback, l1_callback, l2_callback, r2_callback, square_callback,
-    #  triangle_callback, cross_callback, start_callback, hat_*_callback) ...
+    def axes_callback(self, axes):
+        # Если робот находится в режиме остановки (speed_mode = 0),
+        # сбрасываем все амплитуды движения в ноль.
+        if self.speed_mode == 0:
+            self.x_move_amplitude = 0.0
+            self.angle_move_amplitude = 0.0
+            self.y_move_amplitude = 0.0
+            # Если робот был в движении и переключились на 0 скорость, останавливаем его.
+            if self.status == 'move':
+                self.gait_manager.stop()
+            self.status = 'stop'
+            self.update_param = False
+        else: # Если робот в режиме скорости 1, 2 или 3
+            current_speed_settings = self.speed_params[self.speed_mode]
+
+            self.x_move_amplitude = 0.0
+            self.angle_move_amplitude = 0.0
+            self.y_move_amplitude = 0.0
+
+            # Обновляем period_time из текущих настроек скорости
+            self.period_time = list(current_speed_settings['period_time'])
+
+            # Управление движением вперед/назад по оси LY
+            if axes['ly'] > 0.3: # Движение вперед
+                self.update_param = True
+                self.x_move_amplitude = current_speed_settings['x_amp_base']
+            elif axes['ly'] < -0.3: # Движение назад
+                self.update_param = True
+                self.x_move_amplitude = -current_speed_settings['x_amp_base']
+
+            # Управление движением влево/вправо по оси LX
+            if axes['lx'] > 0.3: # Движение вправо
+                self.period_time[2] = 0.025
+                self.update_param = True
+                self.y_move_amplitude = 0.015
+            elif axes['lx'] < -0.3: # Движение влево
+                self.period_time[2] = 0.025
+                self.update_param = True
+                self.y_move_amplitude = -0.015
+
+            # Управление поворотом по оси RX
+            if axes['rx'] > 0.3: # Поворот вправо
+                self.update_param = True
+                self.angle_move_amplitude = 8
+            elif axes['rx'] < -0.3: # Поворот влево
+                self.update_param = True
+                self.angle_move_amplitude = -8
+
+        # === Логика запуска движения ===
+        # Запускаем движение, если:
+        # 1. Есть команда обновления параметров (изменился стик) ИЛИ
+        # 2. Робот стоял, перешел в режим движения (speed_mode > 0) и получает команду движения
+        if self.update_param or (self.speed_mode > 0 and self.status == 'stop' and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0)):
+            # === КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ===
+            # Получаем ТЕКУЩИЕ параметры от GaitManager (включая позу туловища)
+            self.gait_param = self.gait_manager.get_gait_param()
+            
+            # Устанавливаем ТОЛЬКО текущую высоту тела и z_move_amplitude
+            # НЕ копируем другие параметры позы туловища (init_x_offset, init_y_offset, init_pitch_offset и т.д.)
+            # из speed_params. Они остаются такими, какими их установил GaitManager при инициализации.
+            self.gait_param['init_z_offset'] = self.init_z_offset
+
+            # Устанавливаем высоту подъема ноги из параметров текущей скорости
+            if self.speed_mode > 0:
+                self.gait_param['z_move_amplitude'] = current_speed_settings['z_move_amplitude']
+            else:
+                self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+
+            # Отправляем обновленные параметры движения в GaitManager
+            # self.gait_param содержит текущие параметры позы, установленные GaitManager,
+            # которые НЕ перезаписываются.
+            self.gait_manager.set_step(self.period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
+            # ==========================
+
+        # Логика для перехода между состоянием 'stop' и 'move'
+        if self.status == 'stop' and (self.update_param or (self.speed_mode > 0 and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0))):
+            self.status = 'move'
+        elif self.status == 'move' and not self.update_param and self.x_move_amplitude == 0 and self.y_move_amplitude == 0 and self.angle_move_amplitude == 0 and self.speed_mode > 0:
+            # Если робот был в движении, но все амплитуды стали 0 (и не режим 0) - останавливаем.
+            self.status = 'stop'
+            self.gait_manager.stop()
+        elif self.speed_mode == 0 and self.status == 'move':
+            # Если переключились на 0 скорость, и он двигался
+            self.gait_manager.stop()
+            self.status = 'stop'
+
+        self.update_param = False # Сбрасываем флаг обновления параметров
+
+    # === ИСПРАВЛЕНО: Восстановлен метод callback для управления высотой ===
+    def callback(self, axes):
+        # Проверяем временную метку, чтобы не обновлять высоту слишком часто
+        if rospy.get_time() > self.time_stamp_ry:
+            self.update_height = False
+            # Управление высотой тела робота (ось RY)
+            if axes['ry'] < -0.5: # Поднять робота
+                self.update_height = True
+                self.init_z_offset += 0.005
+                if self.init_z_offset > 0.06:
+                    self.update_height = False
+                    self.init_z_offset = 0.06
+            elif axes['ry'] > 0.5: # Опустить робота
+                self.update_height = True
+                self.init_z_offset += -0.005
+                if self.init_z_offset < 0.025:
+                    self.update_height = False
+                    self.init_z_offset = 0.025
+
+            # Если высота тела изменилась
+            if self.update_height:
+                # === КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ===
+                # Получаем ТЕКУЩИЕ параметры от GaitManager (включая позу туловища)
+                self.gait_param = self.gait_manager.get_gait_param()
+                
+                # Используем body_height как в старом коде для update_param
+                self.gait_param['body_height'] = self.init_z_offset
+
+                # Определяем period_time для передачи в update_param
+                current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
+
+                # Z-амплитуда шага
+                if self.speed_mode != 0:
+                    self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
+                else:
+                    self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+
+                # НЕ копируем другие параметры позы туловища из speed_params
+                # Параметры позы остаются текущими, установленными GaitManager.
+
+                # Передаем обновленные параметры (только высота и z_move_amplitude)
+                self.gait_manager.update_param(current_period_time_for_update, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
+                # ==========================
+                self.time_stamp_ry = rospy.get_time() + 0.05 # Задержка
+    # ======================================================================
+
+    def select_callback(self, new_state):
+        pass
+
+    def r1_callback(self, new_state):
+        if new_state == ButtonState.Pressed:
+            # Переключение скорости по возрастанию
+            self.speed_mode = min(self.speed_mode + 1, 3) # Ограничиваем максимумом 3
+            rospy.loginfo(f"Speed Mode: {self.speed_mode}")
+            self.board.set_buzzer(1000 + self.speed_mode * 200, 0.05, 0.02, 1)
+            self.gait_manager.stop()
+            self.status = 'stop'
+
+    def l1_callback(self, new_state):
+        if new_state == ButtonState.Pressed:
+            # Переключение скорости по убыванию
+            self.speed_mode = max(self.speed_mode - 1, 0) # Ограничиваем минимумом 0
+            rospy.loginfo(f"Speed Mode: {self.speed_mode}")
+            self.board.set_buzzer(1000 - self.speed_mode * 100, 0.05, 0.02, 1)
+            self.gait_manager.stop()
+            self.status = 'stop'
+
+    def l2_callback(self, new_state):
+        pass
+
+    def r2_callback(self, new_state):
+        pass
+
+    def square_callback(self, new_state):
+        pass
 
     # === ДОБАВЛЕНО: Обработчик кнопки Circle (предполагаемая кнопка "B") ===
     def circle_callback(self, new_state):
         """
         Выполняет действие "подняться" (get up).
-        Пытается определить, с какой стороны робот упал, и выбрать соответствующее действие.
         """
         # Проверяем, что кнопка была только что нажата (Pressed)
         if new_state == ButtonState.Pressed:
             rospy.loginfo("Circle (B) button pressed. Attempting to perform 'get up' action.")
             self.board.set_buzzer(1500, 0.1, 0.05, 1) # Звуковой сигнал
 
-            # В простейшем случае можно запустить одно из действий.
-            # В более сложной реализации (как в Pasted_Text_1753855641149.txt)
-            # состояние робота ('stand', 'lie', 'recline') отслеживается с помощью IMU.
-            # Здесь мы можем просто попробовать одно действие или запросить ввод/определение.
-
-            # === Вариант 1: Запуск стандартного действия lie_to_stand ===
-            # Это действие, вероятно, подходит для подъема со спины или живота в большинстве случаев.
+            # Запуск стандартного действия lie_to_stand
             try:
                 if self.motion_manager is not None:
                     # Запускаем действие подъема спереди
@@ -116,49 +269,60 @@ class JoystickController:
                     rospy.logwarn("MotionManager is not initialized. Cannot perform get up action.")
             except Exception as e:
                 rospy.logerr(f"Error calling MotionManager.run_action for '{self.lie_to_stand_action_name}': {e}")
-            # ===================================================================
-
-            # === Вариант 2: (Расширенный) Попытка определить сторону падения ===
-            # Это требует доступа к данным IMU или другого сенсора.
-            # Ниже приведен концептуальный пример, как это *могло бы* выглядеть,
-            # если бы у нас был доступ к углу наклона, например, через сервис или переменную.
-            # ------------------------------------------------------------------------
-            # try:
-            #     # ПРЕДПОЛОЖЕНИЕ: Есть способ получить угол наклона робота (например, из IMU)
-            #     # angle = self.get_robot_angle() # Эта функция должна быть реализована
-            #
-            #     # if angle is not None:
-            #     #     if angle < 30: # Робот лежит на животе
-            #     #         rospy.loginfo("Robot appears to be lying on its front. Initiating lie_to_stand.")
-            #     #         self.motion_manager.run_action(self.lie_to_stand_action_name)
-            #     #     elif angle > 150: # Робот лежит на спине
-            #     #         rospy.loginfo("Robot appears to be lying on its back. Initiating recline_to_stand.")
-            #     #         self.motion_manager.run_action(self.recline_to_stand_action_name)
-            #     #     else:
-            #     #         rospy.logwarn(f"Robot angle ({angle}) is ambiguous for get up action. Defaulting to lie_to_stand.")
-            #     #         self.motion_manager.run_action(self.lie_to_stand_action_name)
-            #     # else:
-            #     #     rospy.logwarn("Could not determine robot angle. Defaulting to lie_to_stand.")
-            #     #     self.motion_manager.run_action(self.lie_to_stand_action_name)
-            # except Exception as e:
-            #     rospy.logerr(f"Error determining robot state or calling MotionManager: {e}")
-            #     # Fallback
-            #     rospy.logwarn("Fallback: Initiating default lie_to_stand action.")
-            #     try:
-            #         self.motion_manager.run_action(self.lie_to_stand_action_name)
-            #     except Exception as e2:
-            #         rospy.logerr(f"Fallback action also failed: {e2}")
-            # ------------------------------------------------------------------------
-
     # ======================================================================
+
+    def triangle_callback(self, new_state):
+        pass
+
+    def cross_callback(self, new_state):
+        pass
+
+    def start_callback(self, new_state):
+        # Сброс высоты тела к начальной (как в старом коде)
+        if new_state == ButtonState.Pressed:
+            self.board.set_buzzer(1900, 0.1, 0.05, 1)
+            # === КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ===
+            self.gait_param = self.gait_manager.get_gait_param() # Получаем текущие параметры
+            t = int(abs(0.025 - self.init_z_offset) / 0.005)
+            if t != 0:
+                for i in range(t):
+                    self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
+                    self.gait_param['body_height'] = self.init_z_offset
+
+                    current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
+
+                    if self.speed_mode != 0:
+                        self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
+                    else:
+                        self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+
+                    # НЕ копируем другие параметры позы туловища из speed_params
+                    # Передача параметров (только высота и z_move_amplitude)
+                    self.gait_manager.update_param(current_period_time_for_update, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
+                    time.sleep(0.05)
+            # ==========================
+
+    def hat_xl_callback(self, new_state):
+        pass
+
+    def hat_xr_callback(self, new_state):
+        pass
+
+    def hat_yd_callback(self, new_state):
+        pass
+
+    def hat_yu_callback(self, new_state):
+        pass
 
     def joy_callback(self, joy_msg):
         axes = dict(zip(AXES_MAP, joy_msg.axes))
         axes_changed = False
         buttons = dict(zip(BUTTON_MAP, joy_msg.buttons))
 
+        # === ИСПРАВЛЕНО: Теперь метод callback существует ===
         # Обработка высоты тела (независимо от режима скорости)
         self.callback(axes)
+        # ===================================================
 
         # Проверяем, изменились ли значения осей (кроме 'ry')
         for key, value in axes.items():
