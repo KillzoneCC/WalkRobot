@@ -60,7 +60,7 @@ class JoystickController:
         self.update_param = False
 
         self.last_axes = dict(zip(AXES_MAP, [0.0,] * len(AXES_MAP)))
-        self.last_buttons = dict(zip(BUTTON_MAP, [0.0,] * len(BUTTON_MAP))))
+        self.last_buttons = dict(zip(BUTTON_MAP, [0.0,] * len(BUTTON_MAP)))
         self.mode = 0
 
         time.sleep(0.2)
