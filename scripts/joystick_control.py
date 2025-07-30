@@ -5,13 +5,16 @@ import rospy
 from ainex_sdk import Board
 from sensor_msgs.msg import Joy
 from ainex_kinematics.gait_manager import GaitManager
+
 AXES_MAP = 'lx', 'ly', 'rx', 'ry', 'r2', 'l2', 'hat_x', 'hat_y'
 BUTTON_MAP = 'cross', 'circle', '', 'square', 'triangle', '', 'l1', 'r1', 'l2', 'r2', 'select', 'start', '', 'l3', 'r3', '', 'hat_xl', 'hat_xr', 'hat_yu', 'hat_yd', ''
+
 class ButtonState():
     Normal = 0
     Pressed = 1
     Holding = 2
     Released = 3
+
 class JoystickController:
     def __init__(self):
         rospy.init_node('joystick_control', anonymous=True)
@@ -20,49 +23,38 @@ class JoystickController:
         # speed_mode: Отслеживает текущий режим скорости.
         # 0 - остановка, 1 - Скорость 1, 2 - Скорость 2, 3 - Скорость 3.
         self.speed_mode = 0 # Робот начинается с нулевой скорости, как и запрошено
-        # speed_params: Словарь, содержащий все параметры для каждого режима скорости.
-        # Параметры скоростей остаются ТОЧНО ТАКИМИ, как вы указали.
+        # speed_params: Словарь, содержащий параметры для каждого режима скорости.
+        # Оставлены только параметры, напрямую влияющие на движение ног.
         self.speed_params = {
-            1: { # Скорость 1 (По вашим точным указаниям)
-                'period_time': [400, 0.2, 0.022],  
-                'x_amp_base': 0.01,
-                'init_z_offset': 0.025,
-                'z_move_amplitude': 0.016  
+            1: { # Скорость 1
+                'period_time': [400, 0.2, 0.022], # [period_time_ms, dsp_ratio, y_swap_amplitude?]
+                'x_amp_base': 0.01,               # Базовая амплитуда движения вперёд/назад
+                'init_z_offset': 0.025,           # Начальная высота (для информации/сброса)
+                'z_move_amplitude': 0.016         # Амплитуда подъёма ноги
             },
-            2: { # Скорость 2 (Как было согласовано)
+            2: { # Скорость 2
                 'period_time': [600, 0.25, 0.022],
                 'x_amp_base': 0.020,
                 'init_z_offset': 0.025,
-                'z_move_amplitude': 0.016  
+                'z_move_amplitude': 0.016
             },
-            3: { # Скорость 3 (Обновленные параметры в соответствии с вашими требованиями)
-                'period_time': [500.0, 0.22, 0.020], # period_time, dsp_ratio, y_swap_amplitude
-                'x_amp_base': 0.02,                 # ИЗМЕНЕНО: Исправлено на 0.02, чтобы соответствовать допустимому диапазону (-0.02~0.02)
-                'init_z_offset': 0.025,              # init_z_offset (начальное смещение по Z, высота тела)
-                'z_move_amplitude': 0.018,           # z_move_amplitude (амплитуда подъема ноги)
-                # Дополнительные параметры из вашего списка, если они могут быть использованы:
-                'init_x_offset': 0.0,
-                'init_y_offset': -0.005,
-                'step_fb_ratio': 0.030,
-                'init_roll_offset': 0.0,
-                'angle_move_amplitude': 0.0, # В `axes_callback` это значение переопределяется на 8 или -8
-                'init_pitch_offset': 0.0,
-                'z_swap_amplitude': 0.006,
-                'arm_swing_gain': 2.0,
-                'init_yaw_offset': 0.0,
-                'pelvis_offset': 5.0,
-                'hip_pitch_offset': 15.0
+            3: { # Скорость 3
+                'period_time': [500.0, 0.22, 0.020],
+                'x_amp_base': 0.02, # Исправлено на 0.02
+                'init_z_offset': 0.025,
+                'z_move_amplitude': 0.018 # Амплитуда подъёма ноги увеличена
+                # Параметры позы туловища НЕ передаются в set_step/update_param напрямую из speed_params
+                # Они задаются один раз при инициализации или изменяются отдельно (например, высота через RY)
             }
         }
         # ===================================================
         # Инициализация текущих параметров движения.
-        # Эти значения будут обновляться из self.speed_params в зависимости от self.speed_mode.
-        # При старте (speed_mode = 0) амплитуды движения равны 0.
-        self.period_time = list(self.speed_params[1]['period_time']) # Инициализируем базовыми значениями, но режим 0
+        self.period_time = list(self.speed_params[1]['period_time']) # Инициализируем базовыми значениями
         self.x_move_amplitude = 0
         self.y_move_amplitude = 0
         self.angle_move_amplitude = 0
-        self.init_z_offset = self.speed_params[1]['init_z_offset'] # Высота тела по умолчанию
+        # Высота тела по умолчанию, соответствует начальной позе walk_ready
+        self.init_z_offset = self.speed_params[1]['init_z_offset']
         self.time_stamp_ry = 0
         self.count_stop = 0
         self.status = 'stop' # Текущий статус движения робота: 'stop' или 'move'
@@ -80,13 +72,12 @@ class JoystickController:
         # =============================================================
         # Подписка на топик ROS '/joy' для получения данных с джойстика
         self.joy_sub = rospy.Subscriber('joy', Joy, self.joy_callback)
-        # Добавим начальную остановку робота при запуске (на всякий случай, если walk_ready не останавливает походку)
+        # Добавим начальную остановку робота при запуске (на всякий случай)
         self.gait_manager.stop()
         rospy.loginfo("JoystickController initialized. Starting in Speed Mode: 0 (STOP)")
 
     # Метод для обработки входных данных с осей джойстика (движение, поворот)
     def axes_callback(self, axes):
-        current_speed_settings = None
         # Если робот находится в режиме остановки (speed_mode = 0),
         # сбрасываем все амплитуды движения в ноль.
         if self.speed_mode == 0:
@@ -94,69 +85,68 @@ class JoystickController:
             self.angle_move_amplitude = 0.0
             self.y_move_amplitude = 0.0
             # Если робот был в движении и переключились на 0 скорость, останавливаем его.
-            if self.status == 'move':  
+            if self.status == 'move':
                 self.gait_manager.stop() # Останавливаем движение робота
             self.status = 'stop'
             self.update_param = False # Убеждаемся, что не обновляем параметры, если в режиме остановки
         else: # Если робот в режиме скорости 1, 2 или 3
             # Получаем параметры для текущего выбранного режима скорости
             current_speed_settings = self.speed_params[self.speed_mode]
+
             # Сброс амплитуд движения и параметров времени по умолчанию для текущей скорости
             self.x_move_amplitude = 0.0
             self.angle_move_amplitude = 0.0
             self.y_move_amplitude = 0.0
+
             # Обновляем period_time, dsp_ratio, y_swap_amplitude из текущих настроек скорости
             self.period_time = list(current_speed_settings['period_time'])
             # Управление движением вперед/назад по оси LY (левый стик по Y)
             if axes['ly'] > 0.3: # Движение вперед
                 self.update_param = True
-                self.x_move_amplitude = current_speed_settings['x_amp_base'] # Берем базовую амплитуду из параметров текущей скорости
+                self.x_move_amplitude = current_speed_settings['x_amp_base']
             elif axes['ly'] < -0.3: # Движение назад
                 self.update_param = True
                 self.x_move_amplitude = -current_speed_settings['x_amp_base']
             # Управление движением влево/вправо по оси LX (левый стик по X)
             if axes['lx'] > 0.3: # Движение вправо
-                self.period_time[2] = 0.025 # Этот параметр отвечает за приземление ноги, фиксируем его для бокового шага
+                self.period_time[2] = 0.025 # Фиксируем параметр приземления ноги для бокового шага
                 self.update_param = True
-                self.y_move_amplitude = 0.015 # y_move_amplitude зафиксировано на 0.015
+                self.y_move_amplitude = 0.015
             elif axes['lx'] < -0.3: # Движение влево
                 self.period_time[2] = 0.025
                 self.update_param = True
-                self.y_move_amplitude = -0.015 # y_move_amplitude зафиксировано на -0.015
+                self.y_move_amplitude = -0.015
             # Управление поворотом по оси RX (правый стик по X)
             if axes['rx'] > 0.3: # Поворот вправо
                 self.update_param = True
-                self.angle_move_amplitude = 8 # angle_move_amplitude зафиксировано на 8 градусов
+                self.angle_move_amplitude = 8
             elif axes['rx'] < -0.3: # Поворот влево
                 self.update_param = True
-                self.angle_move_amplitude = -8 # angle_move_amplitude зафиксировано на -8 градусов
+                self.angle_move_amplitude = -8
+
         # Если флаг update_param установлен (т.е. были изменения в движении или повороте)
         # ИЛИ если мы вышли из режима остановки (speed_mode > 0) и хотим начать движение
         if self.update_param or (self.speed_mode > 0 and self.status == 'stop' and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0)):
-            self.gait_param = self.gait_manager.get_gait_param() 
+            self.gait_param = self.gait_manager.get_gait_param()
+            # === ИЗМЕНЕНО: Устанавливаем ТОЛЬКО текущую высоту тела и z_move_amplitude ===
+            # Не копируем другие параметры позы туловища (init_x_offset и т.д.) из speed_params
             self.gait_param['init_z_offset'] = self.init_z_offset # Устанавливаем текущую высоту тела
+
             # Устанавливаем высоту подъема ноги из параметров текущей скорости, если режим > 0
-            if self.speed_mode > 0 and current_speed_settings:
-                self.gait_param['z_move_amplitude'] = current_speed_settings['z_move_amplitude'] 
-                # Дополнительно обновляем другие параметры, если они существуют для текущей скорости
-                self.gait_param['init_x_offset'] = current_speed_settings.get('init_x_offset', 0.0)
-                self.gait_param['init_y_offset'] = current_speed_settings.get('init_y_offset', 0.0)
-                self.gait_param['step_fb_ratio'] = current_speed_settings.get('step_fb_ratio', 0.0)
-                self.gait_param['init_roll_offset'] = current_speed_settings.get('init_roll_offset', 0.0)
-                # self.gait_param['angle_move_amplitude'] обновляется выше в зависимости от стика
-                self.gait_param['init_pitch_offset'] = current_speed_settings.get('init_pitch_offset', 0.0)
-                self.gait_param['z_swap_amplitude'] = current_speed_settings.get('z_swap_amplitude', 0.0)
-                self.gait_param['arm_swing_gain'] = current_speed_settings.get('arm_swing_gain', 0.0)
-                self.gait_param['init_yaw_offset'] = current_speed_settings.get('init_yaw_offset', 0.0)
-                self.gait_param['pelvis_offset'] = current_speed_settings.get('pelvis_offset', 0.0)
-                self.gait_param['hip_pitch_offset'] = current_speed_settings.get('hip_pitch_offset', 0.0)
+            if self.speed_mode > 0:
+                self.gait_param['z_move_amplitude'] = current_speed_settings['z_move_amplitude']
             else: # Если speed_mode == 0, используем z_move_amplitude от Скорости 1 как базовое
                 self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+            # ============================================================================
+
             # Отправляем обновленные параметры движения в GaitManager
+            # ВАЖНО: self.gait_param содержит текущие параметры позы (включая init_*_offset),
+            #        которые НЕ перезаписываются из speed_params в этом методе.
             self.gait_manager.set_step(self.period_time, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
+
         # Логика для перехода между состоянием 'stop' и 'move'
-        if self.status == 'stop' and (self.update_param or (self.speed_mode > 0 and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0))): 
-            self.status = 'move' 
+        if self.status == 'stop' and (self.update_param or (self.speed_mode > 0 and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0))):
+            self.status = 'move'
         elif self.status == 'move' and not self.update_param and self.x_move_amplitude == 0 and self.y_move_amplitude == 0 and self.angle_move_amplitude == 0 and self.speed_mode > 0:
             # Если робот был в движении, но все амплитуды стали 0 (и не режим 0) - значит он должен остановиться.
             self.status = 'stop'
@@ -184,35 +174,30 @@ class JoystickController:
                 if self.init_z_offset < 0.025: # Минимальная высота
                     self.update_height = False
                     self.init_z_offset = 0.025
+
             # Если высота тела изменилась
-            if self.update_height: 
+            if self.update_height:
                 self.gait_param = self.gait_manager.get_gait_param()
-                # === ИЗМЕНЕНО: Используем правильный ключ для высоты ===
-                self.gait_param['init_z_offset'] = self.init_z_offset 
-                # ======================================================
+                # === ИЗМЕНЕНО: Используем body_height как в старом коде для update_param ===
+                self.gait_param['body_height'] = self.init_z_offset
+                # ========================================================================
                 # Определяем period_time для передачи в update_param
                 # Используем параметры из текущего speed_mode, если он активен,
                 # иначе используем базовые параметры из speed_params[1]
                 current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
+
                 # Z-амплитуда шага должна быть взята из текущего режима скорости, если он не 0.
-                if self.speed_mode != 0: 
+                if self.speed_mode != 0:
                     self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
-                else: 
+                else:
                     # Если в режиме остановки, используем значение по умолчанию для Z-амплитуды (Скорость 1)
                     self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
-                # Также передаем другие параметры, которые могут быть специфичны для скорости 3
-                # Используем .get() с запасным значением, чтобы избежать KeyError, если параметра нет для данной скорости
-                self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0) if self.speed_mode != 0 else 0.0
-                self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
-                # Передаем обновленные параметры
+
+                # === ИЗМЕНЕНО: НЕ копируем другие параметры позы туловища из speed_params ===
+                # Параметры позы остаются текущими, установленными ранее или по умолчанию.
+                # ============================================================================
+
+                # Передаем обновленные параметры (только высота и z_move_amplitude)
                 self.gait_manager.update_param(current_period_time_for_update, self.x_move_amplitude, self.y_move_amplitude, self.angle_move_amplitude, self.gait_param, step_num=0)
                 self.time_stamp_ry = rospy.get_time() + 0.05 # Задержка для плавного изменения высоты
 
@@ -231,7 +216,7 @@ class JoystickController:
                 self.speed_mode = 3
             elif self.speed_mode == 3:
                 # Если уже на 3-й скорости, остаемся на 3-й
-                self.speed_mode = 3 
+                self.speed_mode = 3
             rospy.loginfo(f"Speed Mode: {self.speed_mode}")
             self.board.set_buzzer(1000 + self.speed_mode * 200, 0.05, 0.02, 1) # Звук в зависимости от скорости
             self.gait_manager.stop() # Останавливаем текущее движение для плавного перехода
@@ -248,7 +233,7 @@ class JoystickController:
                 self.speed_mode = 0 # После 1-й скорости переключаемся на 0 (остановку)
             elif self.speed_mode == 0:
                 # Если уже на 0 скорости, остаемся на 0.
-                self.speed_mode = 0 
+                self.speed_mode = 0
             rospy.loginfo(f"Speed Mode: {self.speed_mode}")
             self.board.set_buzzer(1000 - self.speed_mode * 100, 0.05, 0.02, 1) # Звук в зависимости от скорости
             self.gait_manager.stop() # Останавливаем текущее движение для плавного перехода
@@ -259,7 +244,7 @@ class JoystickController:
         pass
     def r2_callback(self, new_state):
         pass
-    def square_callback(self, new_state):  
+    def square_callback(self, new_state):
         pass
     def circle_callback(self, new_state):
         pass
@@ -279,28 +264,17 @@ class JoystickController:
                 for i in range(t):
                     # Постепенное изменение высоты
                     self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
-                    # === ИЗМЕНЕНО: Используем правильный ключ для высоты ===
-                    self.gait_param['init_z_offset'] = self.init_z_offset
-                    # ======================================================
+                    # === ИЗМЕНЕНО: Используем body_height как в старом коде ===
+                    self.gait_param['body_height'] = self.init_z_offset
+                    # ========================================================
                     # Определяем period_time для передачи в update_param
                     current_period_time_for_update = list(self.speed_params[self.speed_mode]['period_time']) if self.speed_mode != 0 else list(self.speed_params[1]['period_time'])
                     # Убедимся, что z_move_amplitude обновляется также
-                    # Если в режиме остановки, используем значение по умолчанию для Z-амплитуды (Скорость 1)
                     if self.speed_mode != 0:
                         self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude']
                     else:
-                        self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude'] 
-                    # Передача дополнительных параметров для скорости 3
-                    self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['init_yaw_offset'] = self.speed_params[self.speed_mode].get('init_yaw_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['pelvis_offset'] = self.speed_params[self.speed_mode].get('pelvis_offset', 0.0) if self.speed_mode != 0 else 0.0
-                    self.gait_param['hip_pitch_offset'] = self.speed_params[self.speed_mode].get('hip_pitch_offset', 0.0) if self.speed_mode != 0 else 0.0
+                        self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
+                    # Передача параметров (только высота и z_move_amplitude)
                     self.gait_manager.update_param(current_period_time_for_update, 0.0, 0.0, 0.0, self.gait_param, step_num=1)
                     time.sleep(0.05)
 
@@ -323,12 +297,12 @@ class JoystickController:
         # Обработка высоты тела (независимо от режима скорости)
         self.callback(axes)
         # Проверяем, изменились ли значения осей (кроме 'ry', которая используется для высоты)
-        for key, value in axes.items(): 
+        for key, value in axes.items():
             if key != 'ry':
                 if self.last_axes[key] != value:
                     axes_changed = True
         # Если оси изменились, вызываем axes_callback для обработки движения
-        # В режиме скорости 0, axes_callback просто сбросит амплитуды и остановит, 
+        # В режиме скорости 0, axes_callback просто сбросит амплитуды и остановит,
         # поэтому его можно вызывать всегда.
         if axes_changed:
             try:
