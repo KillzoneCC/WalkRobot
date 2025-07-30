@@ -68,7 +68,8 @@ class JoystickController:
         self.x_move_amplitude = 0
         self.y_move_amplitude = 0
         self.angle_move_amplitude = 0
-        self.init_z_offset = self.speed_params[1]['init_z_offset'] # Высота тела по умолчанию, взятая из Speed 1
+        # Устанавливаем начальное смещение по Z (высоту тела) из параметров скорости 1
+        self.init_z_offset = self.speed_params[1]['init_z_offset'] 
 
         self.time_stamp_ry = 0
         self.count_stop = 0
@@ -149,19 +150,19 @@ class JoystickController:
         if self.update_param or (self.speed_mode > 0 and self.status == 'stop' and (self.x_move_amplitude != 0 or self.y_move_amplitude != 0 or self.angle_move_amplitude != 0)):
             self.gait_param = self.gait_manager.get_gait_param() 
             
+            # Мы хотим, чтобы init_z_offset не менялся автоматически при движении.
+            # Он должен сохранять значение, установленное при инициализации или через стик RY.
+            # Поэтому мы явно устанавливаем его здесь, чтобы оно не "слетало" при set_step.
+            self.gait_param['init_z_offset'] = self.init_z_offset 
+
             # Устанавливаем высоту подъема ноги из параметров текущей скорости, если режим > 0
             if self.speed_mode > 0:
                 self.gait_param['z_move_amplitude'] = self.speed_params[self.speed_mode]['z_move_amplitude'] 
-                # !!! КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Не изменяем init_z_offset здесь, если он уже установлен.
-                # Робот должен сохранить свою начальную высоту, если она не изменена RY стиком.
-                self.gait_param['init_z_offset'] = self.init_z_offset 
-
                 # Дополнительно обновляем другие параметры, если они существуют для текущей скорости
                 self.gait_param['init_x_offset'] = self.speed_params[self.speed_mode].get('init_x_offset', 0.0)
                 self.gait_param['init_y_offset'] = self.speed_params[self.speed_mode].get('init_y_offset', 0.0)
                 self.gait_param['step_fb_ratio'] = self.speed_params[self.speed_mode].get('step_fb_ratio', 0.0)
                 self.gait_param['init_roll_offset'] = self.speed_params[self.speed_mode].get('init_roll_offset', 0.0)
-                # self.gait_param['angle_move_amplitude'] обновляется выше в зависимости от стика
                 self.gait_param['init_pitch_offset'] = self.speed_params[self.speed_mode].get('init_pitch_offset', 0.0)
                 self.gait_param['z_swap_amplitude'] = self.speed_params[self.speed_mode].get('z_swap_amplitude', 0.0)
                 self.gait_param['arm_swing_gain'] = self.speed_params[self.speed_mode].get('arm_swing_gain', 0.0)
@@ -171,7 +172,7 @@ class JoystickController:
 
             else: # Если speed_mode == 0, используем z_move_amplitude от Скорости 1 как базовое
                 self.gait_param['z_move_amplitude'] = self.speed_params[1]['z_move_amplitude']
-                # Сохраняем init_z_offset, чтобы не было неожиданного поднятия при попытке движения
+                # Также убедимся, что init_z_offset остается текущим даже в режиме остановки
                 self.gait_param['init_z_offset'] = self.init_z_offset 
 
             # Отправляем обновленные параметры движения в GaitManager
@@ -213,7 +214,7 @@ class JoystickController:
             # Если высота тела изменилась
             if self.update_height: 
                 self.gait_param = self.gait_manager.get_gait_param()
-                # !!! КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем 'init_z_offset' для body_height
+                # Используем 'init_z_offset' для body_height, так как он хранит текущую высоту
                 self.gait_param['body_height'] = self.init_z_offset
                 
                 # Определяем period_time для передачи в update_param
@@ -317,7 +318,7 @@ class JoystickController:
                 for i in range(t):
                     # Постепенное изменение высоты
                     self.init_z_offset += 0.005 * abs(0.025 - self.init_z_offset) / (0.025 - self.init_z_offset)
-                    # !!! КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Инициализируем 'body_height' тем же значением, что и 'init_z_offset'
+                    # Используем 'init_z_offset' для body_height
                     self.gait_param['body_height'] = self.init_z_offset
                     
                     # Определяем period_time для передачи в update_param
