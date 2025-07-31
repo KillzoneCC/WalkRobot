@@ -71,12 +71,12 @@ class JoystickController:
         # === MotionManager для Get Up ===
         self.motion_manager = MotionManager()
         # Имена действий, как указано в app_controller.py
-        self.lie_to_stand_action_name = 'lie_to_stand'     
+        self.lie_to_stand_action_name = 'lie_to_stand'    
         self.recline_to_stand_action_name = 'recline_to_stand'
         # =============================================
 
         # === Переменные для работы с IMU и состоянием падения ===
-        self.robot_state = 'stand' # Изначально считаем, что робот стоит
+        self.robot_state = 'stand_or_unknown' # Изначально считаем, что робот стоит или его состояние неизвестно
         self.count_lie = 0 # Счетчик для состояния "лицом вниз" (prone)
         self.count_recline = 0 # Счетчик для состояния "лицом вверх" (supine)
         self.FALL_COUNT_THRESHOLD = 50 # Порог счетчика для подтверждения состояния падения
@@ -296,7 +296,13 @@ class JoystickController:
         на основе состояния, определенного через IMU.
         """
         if new_state == ButtonState.Pressed:
-            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.") # msg.buttons[3]
+            rospy.loginfo(f"Circle (B) button pressed. Current IMU robot state: '{self.robot_state}'.")
+
+            # Добавляем эту проверку
+            if self.robot_state == 'stand_or_unknown':
+                rospy.loginfo("Robot is already standing or state is unknown. Get Up action not needed.")
+                self.board.set_buzzer(500, 0.05, 0.05, 2) # Оповещение, что действие не выполнено
+                return # Выходим из функции, если робот стоит
 
             action_to_run = None
             log_msg = ""
@@ -310,10 +316,10 @@ class JoystickController:
             elif self.robot_state == 'recline_to_stand':
                 action_to_run = self.recline_to_stand_action_name
                 log_msg = "Robot state indicates lying on BACK. Initiating recline_to_stand."
-            else: # 'stand_or_unknown'
-                rospy.logwarn(f"Robot state is '{self.robot_state}'. Defaulting to lie_to_stand (from front) as a fallback.")
-                action_to_run = self.lie_to_stand_action_name
-                log_msg = "Robot state 'stand' or 'unknown'. Defaulting to lie_to_stand (from front)."
+            # else: # Эту ветку можно удалить, так как мы уже обработали 'stand_or_unknown'
+            #     rospy.logwarn(f"Robot state is '{self.robot_state}'. Defaulting to lie_to_stand (from front) as a fallback.")
+            #     action_to_run = self.lie_to_stand_action_name
+            #     log_msg = "Robot state 'stand' or 'unknown'. Defaulting to lie_to_stand (from front)."
 
             rospy.loginfo(log_msg)
             self.board.set_buzzer(1500, 0.1, 0.05, 1)
@@ -324,10 +330,10 @@ class JoystickController:
                     rospy.loginfo(f"Action '{action_to_run}' initiated successfully.")
                     
                     # Сброс состояния и счетчиков после отправки команды подъема
-                    self.robot_state = 'stand'
+                    self.robot_state = 'stand_or_unknown' # Устанавливаем в 'stand_or_unknown' после подъема
                     self.count_lie = 0
                     self.count_recline = 0
-                    rospy.logdebug("Robot state set to 'stand' and IMU counters reset after Get Up command.")
+                    rospy.logdebug("Robot state set to 'stand_or_unknown' and IMU counters reset after Get Up command.")
                     
                 else:
                     rospy.logwarn("MotionManager not initialized or no action specified.")
